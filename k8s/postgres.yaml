@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: postgres-init, namespace: barq-assessment }
+data:
+  01-init.sql: |
+    CREATE TABLE IF NOT EXISTS records (
+        id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        title varchar(200) NOT NULL CHECK (length(trim(title)) > 0)
+    );
+    INSERT INTO records (title) VALUES
+        ('Review service readiness'),
+        ('Document the operating procedure');
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres, namespace: barq-assessment }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports: [{ containerPort: 5432 }]
+        env:
+        - { name: POSTGRES_USER, value: barq_app }
+        - { name: POSTGRES_DB, value: barq_tasks }
+        - name: POSTGRES_PASSWORD
+          valueFrom: { secretKeyRef: { name: postgres-secret, key: POSTGRES_PASSWORD } }
+        volumeMounts:
+        - { name: init, mountPath: /docker-entrypoint-initdb.d/01-init.sql, subPath: 01-init.sql }
+        readinessProbe: { exec: { command: [pg_isready, -U, barq_app, -d, barq_tasks] }, periodSeconds: 5 }
+      volumes:
+      - { name: init, configMap: { name: postgres-init } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: barq-assessment }
+spec: { selector: { app: postgres }, ports: [{ port: 5432 }] }
