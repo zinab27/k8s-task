@@ -1,0 +1,92 @@
+name: cd
+
+# BONUS: build -> push -> deploy to the K8s cluster on every push to main.
+# Runs on the self-hosted runner installed on k8s-master (has podman + kubectl).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - "requirements.txt"
+      - "k8s/**"
+      - ".github/workflows/cd.yml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: zinabelamir/barq-app
+  NAMESPACE: barq-assessment
+  DEPLOYMENT: barq-app
+
+jobs:
+  build-push-deploy:
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show runner tooling
+        run: |
+          whoami
+          podman --version
+          kubectl version --client
+          kubectl -n "$NAMESPACE" get nodes
+
+      - name: Compute image tags
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "Building $REGISTRY/$IMAGE_NAME:${GITHUB_SHA::7} and :latest"
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | podman login "$REGISTRY" -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build image with podman
+        run: |
+          podman build \
+            -t "$REGISTRY/$IMAGE_NAME:${SHORT_SHA}" \
+            -t "$REGISTRY/$IMAGE_NAME:latest" \
+            -f Dockerfile .
+
+      - name: Push image to Docker Hub
+        run: |
+          podman push "$REGISTRY/$IMAGE_NAME:${SHORT_SHA}"
+          podman push "$REGISTRY/$IMAGE_NAME:latest"
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Make sure the manifest in git matches the registry image (first run
+          # migrates away from localhost/barq-app:1.0 / Never).
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/app.yaml
+          # Roll out the exact SHA-tagged image we just pushed.
+          kubectl -n "$NAMESPACE" set image "deployment/$DEPLOYMENT" \
+            "app=$REGISTRY/$IMAGE_NAME:${SHORT_SHA}"
+          kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=180s
+
+      - name: Verify rollout (evidence)
+        run: |
+          echo "=== deployment image ==="
+          kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+          echo "=== pods ==="
+          kubectl -n "$NAMESPACE" get pods -l app=barq-app -o wide
+          echo "=== app response via port-forward ==="
+          kubectl -n "$NAMESPACE" port-forward "deploy/$DEPLOYMENT" 18080:8080 &
+          PF_PID=$!
+          trap 'kill $PF_PID' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18080/health >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          echo "--- / ---"
+          curl -s http://127.0.0.1:18080/ || exit 1
+          echo ""
+          echo "--- /ready ---"
+          curl -s http://127.0.0.1:18080/ready || exit 1
+          echo ""
+
+      - name: Logout (cleanup credentials)
+        if: always()
+        run: podman logout "$REGISTRY" || true
+

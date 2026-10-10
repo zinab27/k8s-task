@@ -9,8 +9,8 @@ spec:
     spec:
       containers:
       - name: app
-        image: localhost/barq-app:1.0
-        imagePullPolicy: Never
+        image: docker.io/zinabelamir/barq-app:latest
+    	imagePullPolicy: IfNotPresent
         ports: [{ containerPort: 8080 }]
         env:
         - name: POSTGRES_PASSWORD
