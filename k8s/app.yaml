@@ -17,7 +17,7 @@ spec:
           valueFrom: { secretKeyRef: { name: postgres-secret, key: POSTGRES_PASSWORD } }
         - { name: APP_HOST, value: "0.0.0.0" }
         - { name: APP_PORT, value: "8080" }
-        - { name: APP_MESSAGE, value: "Welcome to BARQ Systems" }
+        - { name: APP_MESSAGE, value: "Welcome to BARQ Systems - CD Test" }
         - { name: DATABASE_URL, value: "postgresql://barq_app:$(POSTGRES_PASSWORD)@postgres:5432/barq_tasks" }
         - { name: REDIS_URL, value: "redis://redis:6379/0" }
         - name: INSTANCE_ID
